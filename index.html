@@ -1915,6 +1915,66 @@ p.feedback-label + .diff {
   font-weight: 600;
 }
 
+/* Where the progress actually lives, and the one action that deletes it. It is
+   standing text rather than a warning that fires: nothing she can do on this
+   screen is dangerous, so it gets the quiet status colour and a rule down the
+   side to hold it apart from the controls, not the lilac the error state uses.
+   Lilac here would cry wolf on every visit. */
+.io-warn {
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* Shown only when the backup is missing or stale, so unlike .io-warn this one
+   has earned some weight \002014 but it is still a fact about her copy and not an
+   error in front of her, so it stays on the status colour. */
+.io-stale {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* A file input styled through its label, because the control browsers draw for
+   it cannot be restyled and reads as nothing she recognises. The input keeps
+   its size and position and is made invisible rather than display:none, which
+   would take it out of the tab order and off VoiceOver's map along with it. */
+.io-file {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.io-file > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3rem;
+  padding: 0 var(--sp-3);
+  font-size: var(--t-base);
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+
+.io-file > input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+.io-file > input:focus-visible + span,
+.io-file > input:focus + span {
+  border-color: var(--accent);
+}
+
 /* \002500\002500 rules list \002014 110 cards, dense \002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500\002500 */
 
 /* Four categories over 110 cards is a lot of thumb, so the screen opens with a
@@ -16092,11 +16152,12 @@ function gradeChoice(item, chosen) {
 const SCHEMA_VERSION = 1;
 const STORAGE_KEY = "english-trainer";
 
-// `counts` and `session` were added after she already had progress stored, and
-// load() wipes anything whose `version` does not match, so bumping
+// `counts`, `session` and `exported` were added after she already had progress
+// stored, and load() wipes anything whose `version` does not match, so bumping
 // SCHEMA_VERSION to announce them would have thrown her levels away. They are
-// therefore additive: an old save has neither key, hydrate fills both in, and
-// the version stays where it is. Nothing here may ever become required reading.
+// therefore additive: an old save has none of the keys, hydrate fills them in,
+// and the version stays where it is. Nothing here may ever become required
+// reading.
 function emptyProgress() {
   return {
     version: SCHEMA_VERSION,
@@ -16107,6 +16168,7 @@ function emptyProgress() {
     topics: [],
     counts: {},
     session: null,
+    exported: null,
   };
 }
 
@@ -16181,6 +16243,7 @@ function hydrate(raw) {
     topics: normalizeTopics(raw.topics),
     counts: normalizeCounts(raw.counts),
     session: normalizeSession(raw.session),
+    exported: typeof raw.exported === "string" ? raw.exported : null,
   };
 }
 
@@ -16306,6 +16369,31 @@ function cardsToday(progress, todayIso) {
 
 function setTopics(progress, topicIds) {
   return { ...progress, topics: normalizeTopics(topicIds) };
+}
+
+// Stamped into the record *before* it is serialised, so the saved file states
+// the day it was made rather than the day of the one before it. Restoring an
+// old backup therefore restores an honest "last backed up" date too, and the
+// staleness line below starts nagging again from the right place.
+function recordExport(progress, todayIso) {
+  return { ...progress, exported: todayIso };
+}
+
+// How long her last backup has been sitting, or null if she has never made one.
+// Null and "a long time ago" are different states and the screen says different
+// things about them: one is advice, the other is a warning.
+//
+// Why any of this exists: her progress lives in localStorage, and a web app
+// added to the home screen keeps that in a container of its own which iOS
+// destroys when the icon is deleted. On 2026-08-16 a reinstall took a day's
+// work with it. Nothing in the browser survives that, so the only real defence
+// is a copy she keeps outside it \u2014 and the only way she remembers to make one
+// is if the app says so.
+function daysSinceExport(progress, todayIso) {
+  const last = progress && progress.exported;
+  if (typeof last !== "string") return null;
+  const n = daysBetween(last, todayIso);
+  return isFinite(n) && n > 0 ? n : 0;
 }
 
 function exportJSON(progress) {
@@ -17189,6 +17277,30 @@ function renderMissed(rules, progress) {
   );
 }
 
+// A week, so a backup made on Sunday is still current the following Saturday
+// and the line stays quiet through an ordinary week of practice.
+const BACKUP_STALE_DAYS = 7;
+
+// Said only when there is something to say. A record with no levels in it has
+// nothing worth keeping, and a copy made this week needs no chasing \u2014 silence
+// is this line's normal state, and it earns its place by being rare. It is a
+// statement of fact rather than an instruction: the button it is talking about
+// is directly underneath, and she can read the situation herself.
+function backupLine(progress, todayIso) {
+  const rules = progress && progress.rules;
+  if (!rules || Object.keys(rules).length === 0) return "";
+  const age = daysSinceExport(progress, todayIso);
+  if (age === null) {
+    return `<p class="io-stale">\u041a\u043e\u043f\u0438\u0438 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441\u0430 \u0435\u0449\u0451 \u043d\u0435\u0442.</p>`;
+  }
+  if (age <= BACKUP_STALE_DAYS) return "";
+  const n = count(age);
+  return (
+    `<p class="io-stale">\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043a\u043e\u043f\u0438\u044f \u2014 ` +
+    `${n} ${plural(n, "\u0434\u0435\u043d\u044c", "\u0434\u043d\u044f", "\u0434\u043d\u0435\u0439")} \u043d\u0430\u0437\u0430\u0434.</p>`
+  );
+}
+
 function renderProgress(rules, progress, todayIso, topics) {
   const today = count(cardsToday(progress, todayIso));
   const streak = progress.streak && progress.streak.count ? progress.streak.count : 0;
@@ -17246,12 +17358,23 @@ function renderProgress(rules, progress, todayIso, topics) {
   // were about to copy, so tapping the wrong button destroyed the thing you
   // came for. The export box is read-only and has a copy control of its own,
   // because getting 1412 characters of JSON out of an editable six-row box with
-  // a thumb is a long-press and a prayer. On a phone there is no file dialog, so
-  // copy and paste is still the whole mechanism.
+  // a thumb is a long-press and a prayer. Copy and paste is the fallback path,
+  // not the only one any more: \u00ab\u0412\u044b\u0433\u0440\u0443\u0437\u0438\u0442\u044c\u00bb now offers the share sheet first, so
+  // the copy lands in \u0424\u0430\u0439\u043b\u044b or iCloud instead of in a note she has to keep.
+  //
+  // The warning above them is not decoration. Her progress lives in
+  // localStorage, and a home-screen web app keeps that in a container iOS
+  // destroys along with the icon; a reinstall on 2026-08-16 cost her a day's
+  // work, and nothing on the page had ever said it could. It is phrased as
+  // where the data lives rather than as an alarm \u2014 she is not doing anything
+  // wrong by reading it, she just needs to know the one thing that deletes it.
   //
   // Everything here starts visible; the wiring decides when to show what.
   const io =
     `<div class="io">` +
+    `<p class="io-warn">\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0445\u0440\u0430\u043d\u0438\u0442\u0441\u044f \u0432 \u0441\u0430\u043c\u043e\u043c \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0435. \u0415\u0441\u043b\u0438 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u0438\u043a\u043e\u043d\u043a\u0443 ` +
+    `\u0441 \u0434\u043e\u043c\u0430\u0448\u043d\u0435\u0433\u043e \u044d\u043a\u0440\u0430\u043d\u0430, \u043e\u043d \u0443\u0434\u0430\u043b\u0438\u0442\u0441\u044f \u0432\u043c\u0435\u0441\u0442\u0435 \u0441 \u043d\u0435\u0439 \u2014 \u0434\u0435\u0440\u0436\u0438\u0442\u0435 \u043a\u043e\u043f\u0438\u044e \u0432 \u0444\u0430\u0439\u043b\u0435.</p>` +
+    backupLine(progress, todayIso) +
     `<div class="io-buttons">` +
     `<button type="button" id="export" class="export">\u0412\u044b\u0433\u0440\u0443\u0437\u0438\u0442\u044c</button>` +
     `<button type="button" id="import" class="import">\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c</button>` +
@@ -17262,7 +17385,18 @@ function renderProgress(rules, progress, todayIso, topics) {
     `<button type="button" id="io-copy" class="io-copy">\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c</button>` +
     `</div>` +
     `<div class="io-group io-group-in">` +
-    `<label class="io-label" for="io-text">\u0412\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0432\u044b\u0433\u0440\u0443\u0437\u043a\u0443 \u0441\u044e\u0434\u0430</label>` +
+    // The file picker is first because it is the path that works: choosing the
+    // saved file is one tap, where pasting means finding the note, selecting
+    // 1412 characters with a thumb and hoping the paste was not cut short.
+    // It fills the box below rather than applying straight away \u2014 an import
+    // overwrites everything she has, and that deserves a second tap.
+    // The input comes first so the focus ring can be drawn on the span that
+    // follows it \u2014 the styling hangs off `input:focus + span`, and there is no
+    // selector that reaches backwards.
+    `<label class="io-file">` +
+    `<input type="file" id="io-file" accept="application/json,.json">` +
+    `<span>\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0444\u0430\u0439\u043b</span></label>` +
+    `<label class="io-label" for="io-text">\u0418\u043b\u0438 \u0432\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0432\u044b\u0433\u0440\u0443\u0437\u043a\u0443 \u0441\u044e\u0434\u0430</label>` +
     `<textarea id="io-text" class="io-text io-in" rows="6" spellcheck="false"></textarea>` +
     `<button type="button" id="io-apply" class="io-apply">\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c</button>` +
     `</div>` +
@@ -18031,35 +18165,164 @@ function setIoOpen(mode, note, failed) {
   else line.removeAttribute("data-state");
 }
 
-// Writes into #io-out, the read-only export box \u2014 never into #io-text, which
-// is the import box and gets cleared every time \u00ab\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c\u00bb opens it. The two
-// used to be the same element, which meant opening the import box wiped an
-// export she had not yet copied. Keeping them apart is what fixes that: this
-// box's value is untouched by anything the import side does.
+// Four ways out, tried in order of how well the copy survives afterwards.
+//
+// The share sheet is first and is the one that matters on her phone: it is the
+// only route that ends with the file somewhere iOS will not delete \u2014 \u0424\u0430\u0439\u043b\u044b,
+// iCloud Drive, a message to herself. Everything the browser stores lives in
+// the home-screen app's container, and deleting the icon destroys that
+// container whole; a reinstall on 2026-08-16 took a day's work with it. A copy
+// that leaves the app is the only copy that is really a backup.
+//
+// `<a download>` is next, for a desktop browser where the share sheet does not
+// exist. The read-only text box is last \u2014 it is where this used to begin, and
+// it still works, but it ends in a note she has to remember to keep.
+//
+// The date is stamped into the record before serialising, so the file states
+// the day it was made and the staleness line on this screen can go quiet the
+// moment she saves. The screen is re-rendered for that reason, and the re-render
+// happens before anything is written into #io-out, since it replaces the markup
+// that box lives in.
+//
+// #io-out is the read-only export box \u2014 never #io-text, which is the import box
+// and gets cleared every time \u00ab\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c\u00bb opens it. The two used to be the same
+// element, which meant opening the import box wiped an export she had not yet
+// copied. Keeping them apart is what fixes that.
 function handleExport() {
+  appState.progress = recordExport(appState.progress, appState.today);
+  persist();
   const data = exportJSON(appState.progress);
-  const fallback = () => {
-    elem("io-out").value = data;
-    setIoOpen("export", "\u0421\u043a\u043e\u043f\u0438\u0440\u0443\u0439\u0442\u0435 \u0442\u0435\u043a\u0441\u0442 \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0435\u0433\u043e \u0432 \u0444\u0430\u0439\u043b.");
+  const filename = `english-trainer-${appState.progress.exported}.json`;
+  renderProgressScreen();
+
+  const toBox = (note, failed) => {
+    const box = elem("io-out");
+    if (box) box.value = data;
+    setIoOpen("export", note || "\u0421\u043a\u043e\u043f\u0438\u0440\u0443\u0439\u0442\u0435 \u0442\u0435\u043a\u0441\u0442 \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0435\u0433\u043e \u0432 \u0444\u0430\u0439\u043b.", failed);
   };
+
+  // The artifact platform's own saver, kept for the app.html build. It does not
+  // exist on the published page, which is an ordinary static document.
   const downloads = window.claude && window.claude.downloads;
   if (downloads && typeof downloads.save === "function") {
     try {
-      const result = downloads.save({ filename: "english-trainer.json", data });
-      if (result && typeof result.catch === "function") result.catch(fallback);
+      const result = downloads.save({ filename, data });
+      if (result && typeof result.catch === "function") result.catch(() => toBox());
+      setIoOpen(null, "\u041a\u043e\u043f\u0438\u044f \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430.");
       return;
     } catch (e) {
-      fallback();
+      toBox();
       return;
     }
   }
-  fallback();
+
+  if (shareFile(filename, data, toBox)) return;
+  if (downloadFile(filename, data)) return;
+  toBox();
+}
+
+// True if the share sheet was opened; the result is reported from the promise,
+// because until she picks a destination nothing has been saved. Cancelling the
+// sheet is a decision, not a failure: it clears the note rather than raising
+// one, and it does not fall through to the text box, which would answer a
+// deliberate "no" by putting 1412 characters of JSON on the screen.
+function shareFile(filename, data, toBox) {
+  const nav = window.navigator;
+  if (!nav || typeof nav.share !== "function" || typeof window.File !== "function") {
+    return false;
+  }
+  let file;
+  try {
+    file = new File([data], filename, { type: "application/json" });
+  } catch (e) {
+    return false;
+  }
+  // Safari shares text but not every kind of file, and says so through canShare
+  // rather than by throwing later. Asking first is what keeps the next route
+  // reachable.
+  if (typeof nav.canShare === "function" && !nav.canShare({ files: [file] })) {
+    return false;
+  }
+  try {
+    nav.share({ files: [file], title: filename }).then(
+      () => setIoOpen(null, "\u041a\u043e\u043f\u0438\u044f \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430."),
+      (e) => {
+        if (e && e.name === "AbortError") setIoOpen(null, "");
+        else toBox("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0444\u0430\u0439\u043b. \u0421\u043a\u043e\u043f\u0438\u0440\u0443\u0439\u0442\u0435 \u0442\u0435\u043a\u0441\u0442 \u0432\u0440\u0443\u0447\u043d\u0443\u044e.", true);
+      }
+    );
+  } catch (e) {
+    return false;
+  }
+  return true;
+}
+
+// A blob URL rather than a data: one, because a data: URL of this size is
+// refused by some browsers and truncated by others. Revoking is deferred a
+// tick: revoking in the same turn as the click cancels the download outright.
+function downloadFile(filename, data) {
+  if (typeof window.Blob !== "function") return false;
+  const maker = window.URL || window.webkitURL;
+  if (!maker || typeof maker.createObjectURL !== "function") return false;
+  let url = null;
+  try {
+    url = maker.createObjectURL(new Blob([data], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => maker.revokeObjectURL(url), 0);
+    setIoOpen(null, "\u0424\u0430\u0439\u043b \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d.");
+    return true;
+  } catch (e) {
+    if (url) {
+      try {
+        maker.revokeObjectURL(url);
+      } catch (e2) {
+        /* nothing left to do about it */
+      }
+    }
+    return false;
+  }
 }
 
 function handleImportOpen() {
   elem("io-text").value = "";
-  setIoOpen("import", "\u0412\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0441\u044e\u0434\u0430 \u0432\u044b\u0433\u0440\u0443\u0436\u0435\u043d\u043d\u044b\u0439 JSON \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c\u00bb.");
-  elem("io-text").focus();
+  setIoOpen("import", "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b \u0438\u043b\u0438 \u0432\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0432\u044b\u0433\u0440\u0443\u0437\u043a\u0443 \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c\u00bb.");
+}
+
+// Reads the chosen file into the paste box rather than applying it, because an
+// import replaces everything she has and one tap should not be able to do that
+// by accident. What she gets is the same two-step as a paste, with the finding
+// and the selecting done for her.
+//
+// The input's value is cleared afterwards so that choosing the same file twice
+// in a row still fires a change event; without that, a second attempt after a
+// failed apply would look like the app ignoring her.
+function handleImportFile(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  if (typeof window.FileReader !== "function") {
+    setIoOpen("import", "\u042d\u0442\u043e\u0442 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u0443\u043c\u0435\u0435\u0442 \u0447\u0438\u0442\u0430\u0442\u044c \u0444\u0430\u0439\u043b\u044b. \u0412\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0442\u0435\u043a\u0441\u0442 \u0432\u0440\u0443\u0447\u043d\u0443\u044e.", true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const box = elem("io-text");
+    if (box) box.value = typeof reader.result === "string" ? reader.result : "";
+    setIoOpen("import", "\u0424\u0430\u0439\u043b \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d. \u00ab\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c\u00bb \u0437\u0430\u043c\u0435\u043d\u0438\u0442 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441.");
+  };
+  reader.onerror = () => {
+    setIoOpen("import", "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u0444\u0430\u0439\u043b.", true);
+  };
+  try {
+    reader.readAsText(file);
+  } catch (e) {
+    setIoOpen("import", "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u0444\u0430\u0439\u043b.", true);
+  }
+  input.value = "";
 }
 
 // Unlike load(), an import is a deliberate act, so storage throws a message
@@ -18186,6 +18449,13 @@ function bindEvents() {
     }
     const topic = e.target.closest("[data-topic]");
     if (topic) toggleTopic(topic.getAttribute("data-topic"));
+  });
+
+  // `change` bubbles, so the file picker is delegated from the same host as
+  // every button on this screen and survives the re-render that an export or a
+  // restore leaves behind.
+  elem("screen-progress").addEventListener("change", (e) => {
+    if (e.target.closest("#io-file")) handleImportFile(e.target);
   });
 
   elem("screen-progress").addEventListener("click", (e) => {
